@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+
+  <style>
+    table {
+      width: 60%;
+      margin: 40px auto;
+      border-collapse: collapse;
+      font-family: Arial, sans-serif;
+    }
+
+    th {
+      background-color: #4a90d9;
+      color: white;
+      padding: 12px 16px;
+      text-align: center;
+      border: 1px solid #ccc;
+    }
+
+    td {
+      padding: 10px 16px;
+      text-align: center;
+    }
+
+    tr {
+      border: 1px solid grey;
+    }
+  </style>
+</head>
+<body>
+<script>
+  let host = "https://project2part1.onrender.com";
+  let department = "lab";
+  // let employee = "1";
+  let queue = new Map();
+  let claimed = new Map();
+  claimed.set("lab", null);
+  claimed.set("medication", null);
+  claimed.set("imaging", null);
+
+  // Loads any existing History data
+  async function loadQueue() {
+    let response = await fetch(host + "/home");
+    let data = await response.json();
+
+    const tableBody = document.querySelector("#queueTable tbody");
+
+    tableBody.innerHTML = "";
+
+    data.forEach(order => {
+      const row = document.createElement("tr");
+      let orderId = order.orderID;
+      row.innerHTML = `
+            <td>${order.type}</td>
+            <td>${order.patientName}</td>
+            <td>${order.clinicianName}</td>
+            <td>${order.priority}</td>
+            <td>${order.status}</td>
+            <td> <button onclick="cancel(${orderId})">Cancel</button> </td>
+        `;
+
+      tableBody.appendChild(row);
+
+      queue.set(order.orderID, order);
+    });
+
+  }
+
+  async function loadLog() {
+    let response = await fetch(host + "/home/log");
+    let data = await response.json();
+
+    const tableBody = document.querySelector("#logTable tbody");
+
+    tableBody.innerHTML = "";
+
+    data.forEach(order => {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+            <td>${order[0]}</td>
+            <td>${order[1]}</td>
+            <td>${order[2]}</td>
+            <td>${order[3]}</td>
+        `;
+
+      tableBody.appendChild(row);
+    });
+
+  }
+
+  loadQueue();
+  loadLog();
+</script>
+
+<script>
+  let stompClient = null;
+
+  function connect() {
+    const socket = new SockJS(host + '/ws');
+    stompClient = Stomp.over(socket);
+
+    stompClient.connect({}, function(frame) {
+      console.log("Connected: " + frame);
+      subscribeNotify();
+      loadTimer();
+    });
+  }
+
+  function subscribeNotify(){
+    stompClient.subscribe("/order/logs", function(message){
+      let text = message.body;
+      console.log(text);
+    });
+  }
+
+  function loadTimer(){
+    queueInterval = setInterval(loadQueue, 3000);
+    commandInterval = setInterval(loadLog, 3000);
+  }
+
+  connect();
+</script>
+
+<br><br>
+<label for="department">Select Department:</label>
+<select id="department">
+  <option value="lab">Lab</option>
+  <option value="medication">Medication</option>
+  <option value="imaging">Imaging</option>
+</select>
+<br><br>
+<button onclick="setDepartment()">Set Department</button>
+
+<br><br><br><br>
+
+<h2 style="text-align: center;"> Order Queue</h2>
+<table id="queueTable">
+  <thead>
+  <tr>
+    <th>Type</th>
+    <th>Patient</th>
+    <th>Clinician</th>
+    <th>Priority</th>
+    <th>Status</th>
+  </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<br><br>
+
+<button onclick="claimOrder()">Claim Next Order</button>
+
+<br><br>
+
+<button onclick="completeOrder()">Complete Order</button>
+
+<br><br>
+
+<label>Type:</label>
+<input id="type"/>
+<label>Patient:</label>
+<input id="patient"/>
+<label>Clinician:</label>
+<input id="clinician"/>
+<label>Description:</label>
+<input id="description"/>
+<label>Priority:</label>
+<input id="priority"/>
+
+<button onclick="submitOrder()">Submit Order</button>
+<br>
+
+<h2 style="text-align: center;"> Audit Log</h2>
+<table id="logTable">
+  <thead>
+  <tr>
+    <th>Timestamp</th>
+    <th>Type</th>
+    <th>Order ID</th>
+    <th>Actor</th>
+  </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<script>
+
+  async function setDepartment(){
+    department = document.getElementById("department").value;
+    console.log("Department Changed");
+  }
+
+  async function claimOrder(){
+    if(claimed.get(department) != null){
+      console.log("Already claimed an order");
+      return;
+    }
+    let response = await fetch(host + "/home/order");
+    let data;
+    try{
+      data = await response.json();
+    }catch(e){
+      return;
+    }
+
+    let orderId = data.orderID;
+    claimed.set(department, orderId);
+
+    let order = [orderId, department]
+
+    let request = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(order)
+    };
+    await fetch(host + "/home/claim", request);
+  }
+
+  async function completeOrder(){
+    let orderId = claimed.get(department);
+    if(orderId == null){
+      console.log("No Order Claimed");
+      return;
+    }
+
+    let order = [orderId, department]
+
+    let request = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(order)
+    };
+    let response = await fetch(host + "/home/complete", request);
+    if (response.ok){
+      claimed.set(department, null);
+    }
+  }
+
+  async function cancel(orderId){
+    let order = [orderId, department]
+
+    let request = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(order)
+    };
+    await fetch(host + "/home/cancel", request);
+  }
+
+  async function submitOrder() {
+
+    let type = document.getElementById("type").value;
+    if(type.trim() === ""){
+      console.log("Type is Required for order to be created")
+      return
+    }
+
+    let patient = document.getElementById("patient").value;
+    if(patient.trim() === ""){
+      console.log("Patient is Required for order to be created")
+      return
+    }
+    let clinician = document.getElementById("clinician").value;
+    if(clinician.trim() === ""){
+      console.log("Clinician is Required for order to be created")
+      return
+    }
+    let description = document.getElementById("description").value;
+    if(description.trim() === ""){
+      console.log("Description is Required for order to be created")
+      return
+    }
+    let priority = document.getElementById("priority").value;
+    if(priority.trim() === ""){
+      console.log("Priority is Required for order to be created")
+      return
+    }
+
+
+    let order = [type, patient, clinician, description, priority];
+
+    let request = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        // "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify(order)
+    };
+    // let response =
+    await fetch(host + "/home", request);
+  }
+</script>
+</body>
+</html>
